@@ -1,0 +1,11 @@
+
+MyClass:
+{
+	doThing:
+	{
+	}
+}
+
+a: @MyClass;
+
+a.doThing;

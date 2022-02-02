@@ -136,8 +136,14 @@ struct BCDecl
     Symbol* name = nullptr;
     BCDecl* parent = nullptr;
 
+    typedef std::vector<BCDecl*> MemberList;
+
     // Nested/child members of this declaration
-    std::vector<BCDecl*> _members;
+    MemberList _members;
+
+    MemberList const& getMembers() const { return _members; }
+
+
 
     // The number of "direct" slots that need to be allocated
     // in a part created from this decl

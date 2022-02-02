@@ -145,6 +145,7 @@
     <None Include="test.theta" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="basic.h" />
     <ClInclude Include="bytecode.h" />
     <ClInclude Include="diagnostics.h" />
     <ClInclude Include="emit.h" />

@@ -1,67 +1,324 @@
 // vm.h
 #pragma once
 
+#include "basic.h"
+
 namespace theta
 {
 namespace vm
 {
 using namespace bytecode;
 
+struct Mixin;
 struct Object;
 struct Part;
 struct Pattern;
-struct Mixin;
+struct SimplePattern;
 
-struct Pattern : ValueObj
+struct MixinList
 {
-    // The mixins that make up the state of the class
-    std::vector<Mixin*> _mixins;
+    Mixin* _first;
+
+    struct Iterator
+    {
+    public:
+        Iterator(Mixin* mixin)
+            : _mixin(mixin)
+        {}
+
+        bool operator!=(Iterator const& that) const
+        {
+            return _mixin != that._mixin;
+        }
+
+        void operator++();
+
+        Mixin* operator*() const
+        {
+            return _mixin;
+        }
+
+    private:
+        Mixin* _mixin;
+    };
+
+    Iterator begin() const
+    {
+        return Iterator(_first);
+    }
+
+    Iterator end() const
+    {
+        return Iterator(nullptr);
+    }
 };
 
-struct Mixin : ValueObj
+    // Base case for all patterns (e.g., including a pattern for `L & R`)
+struct Pattern : ValueObj
 {
-        // The bytecode that describes the main part
-    Pattern* _parentPattern;
-    BCDecl const* _decl;
-    Part* _origin;
+    SimplePattern* getSimplePattern();
 
-    Mixin(Pattern* parentPattern, BCDecl const* decl, Part* origin)
-        : _parentPattern(parentPattern)
-        , _decl(decl)
-        , _origin(origin)
+        // The mixin sequence that defines this pattern
+    MixinList _mixins;
+
+    MixinList const& getMixins() { return _mixins; }
+
+    bool isEmpty() { return _mixins._first == nullptr; }
+
+};
+
+    // Common case for patterns, that are built out of a sequence of mixins
+struct SimplePattern : Pattern
+{
+    // The total size, in bytes, of instance objects created from this pattern
+    size_t _instanceSize = 0;
+
+    Size getInstanceSize() { return _instanceSize; }
+};
+
+    // The empty pattern: used when we need to have a non-null object
+    // to represent this case...
+struct EmptyPattern : SimplePattern
+{
+public:
+    static EmptyPattern* get()
+    {
+        static EmptyPattern* result = new EmptyPattern();
+        return result;
+    }
+private:
+    EmptyPattern()
     {}
+};
+
+    // The common case of patterns, where it one or more mixins
+struct Mixin : SimplePattern
+{
+    Mixin(
+        BCDecl const* decl,
+        Part* origin,
+        Mixin* next);
+
+    BCDecl const* getDecl() { return _decl; }
+    Part* getOrigin() { return _origin; }
+    Count getSlotCount() { return _decl->_slotCount; }
+
+    Offset getPartOffset() { return _partOffset; }
+
+    typedef BCDecl::MemberList MemberList;
+    MemberList const& getMembers() { return getDecl()->getMembers(); }
+
+        // The declaration that corresponds to this "link" in the mixin chain
+    BCDecl const* _decl = nullptr;
+
+        // The origin part that corresponds to this "link" in the mixin chain
+    Part* _origin = nullptr;
+
+        // The offset of the part for this mixin in an allocated object
+    size_t _partOffset = 0;
+
+        // The next mixin in the chain for this pattern
+        // Note: a null pointer here is equivalent of the next link being the `EmptyPattern`
+    Mixin* _next = nullptr;
+
+        // TODO: pointers to the mixins corresponding to the base(s) of this mixin
+};
+
+inline SimplePattern* Pattern::getSimplePattern()
+{
+    SimplePattern* firstMixin = _mixins._first;
+    return firstMixin ? firstMixin : EmptyPattern::get();
+}
+
+inline void MixinList::Iterator::operator++()
+{
+    _mixin = _mixin->_next;
+}
+
+struct PartList
+{
+public:
+    PartList(Object* object)
+        : _object(object)
+    {}
+
+    struct Iterator
+    {
+    public:
+        Iterator(Object* object, MixinList::Iterator const& mixinIter)
+            : _object(object)
+            , _mixinIter(mixinIter)
+        {}
+
+        bool operator!=(Iterator const& that) const
+        {
+            return _mixinIter != that._mixinIter;
+        }
+
+        void operator++()
+        {
+            ++_mixinIter;
+        }
+        Part* operator*() const;
+
+    private:
+        Object* _object;
+        MixinList::Iterator _mixinIter;
+    };
+
+    Iterator begin() const;
+
+    Iterator end() const;
+
+private:
+    Object* _object;
 };
 
 struct Object : ValueObj
 {
-    // The direct run-time class of the object
-    Pattern* _pattern;
-
-    // The parts that comprise the state of the object
-    std::vector<Part*> _parts;
-
-    Object(Pattern* pattern)
+    Object(SimplePattern* pattern)
         : _pattern(pattern)
     {}
+
+        // The direct run-time pattern  that this object was created from
+    SimplePattern* _pattern = nullptr;
+
+    SimplePattern* getPattern() { return _pattern; }
+
+    // The remainder of an `Object`s state consists of tail-allocated
+    // `Part` objects of varying size, coresponding to the parts described
+    // by `_pattern`.
+
+    Part* getFirstPart()
+    {
+        return *getParts().begin();
+    }
+
+    PartList getParts()
+    {
+        return PartList(this);
+    }
+
+    Part* getPartForMixin(Mixin* mixin)
+    {
+        return getPartAtOffset(mixin->getPartOffset());
+    }
+
+    Part* getPartAtOffset(Offset offset)
+    {
+        return (Part*)((char*)this + offset);
+    }
+};
+
+struct SlotList
+{
+public:
+    SlotList(Value* begin, Count count)
+        : _begin(begin)
+        , _end(begin + count)
+    {}
+
+    typedef Value* Iterator;
+
+    Iterator begin() const { return _begin; }
+    Iterator end() const { return _end; }
+
+private:
+    Value* _begin;
+    Value* _end;
 };
 
 struct Part : ValueObj
 {
-    // The object this is a part of
-    Object* _parentObject;
+    Part(Mixin* mixin)
+        : _mixin(mixin)
+    {}
 
-    // The mixin (class part) that this object is instantiated from
-    Mixin* _mixin;
+        // The mixin that this part corresponds to
+    Mixin* _mixin = nullptr;
 
-    std::vector<Value> _slots;
-
-    Part(Object* parentObject, Mixin* mixin)
-        : _parentObject(parentObject)
-        , _mixin(mixin)
+    Object* getObject()
     {
-        _slots.resize(mixin->_decl->_slotCount);
+        return (Object*)((char*)this - getMixin()->getPartOffset());
     }
+
+    Mixin* getMixin() { return _mixin; }
+    BCDecl const* getDecl() { return getMixin()->getDecl(); }
+    Part* getOrigin() { return getMixin()->getOrigin(); }
+
+    Part* getBase(Index baseIndex);
+
+    // The remainder of a `Part`s state consists of tail-allocated
+    // `Value`s, corresponding to the slots described by `_mixin`.
+
+    Count getSlotCount()
+    {
+        return getMixin()->getSlotCount();
+    }
+    SlotList getSlots()
+    {
+        return SlotList(_getSlots(), getSlotCount());
+    }
+
+    Value* _getSlots()
+    {
+        return (Value*)(this + 1);
+    }
+
+    Value& refSlot(Index index)
+    {
+        return _getSlots()[index];
+    }
+
+    Value getSlot(Index index)
+    {
+        return _getSlots()[index];
+    }
+
+    void setSlot(Index index, Value const& value)
+    {
+        _getSlots()[index] = value;
+    }
+
 };
+
+//
+
+Mixin::Mixin(
+    BCDecl const* decl,
+    Part* origin,
+    Mixin* next)
+    : _decl(decl)
+    , _origin(origin)
+    , _next(next)
+{
+    _mixins._first = this;
+
+    Size existingSize = next ? next->getInstanceSize() : sizeof(Object);
+
+    Size partSize = sizeof(Part) + getSlotCount() * sizeof(Value);
+
+    _partOffset = existingSize;
+    _instanceSize = existingSize + partSize;
+}
+
+PartList::Iterator PartList::begin() const
+{
+    return Iterator(_object, _object->getPattern()->getMixins().begin());
+}
+
+PartList::Iterator PartList::end() const
+{
+    return Iterator(_object, _object->getPattern()->getMixins().end());
+}
+
+Part* PartList::Iterator::operator*() const
+{
+    return _object->getPartForMixin(*_mixinIter);
+}
+
+
+//
 
 class Writer
 {
@@ -263,9 +520,9 @@ public:
 
     void writeName(Part* part)
     {
-        writeName(part->_parentObject);
+        writeName(part->getObject());
         write("[");
-        writeRef(part->_mixin);
+        writeRef(part->getMixin());
         write("]");
     }
 
@@ -303,7 +560,7 @@ public:
         increaseIndent();
 
         bool firstPart = true;
-        for( auto part : object->_parts )
+        for( auto part : object->getParts() )
         {
             write("\n");
 
@@ -318,7 +575,7 @@ public:
             increaseIndent();
 
             bool firstSlot = true;
-            for (auto slotValue : part->_slots)
+            for (auto slotValue : part->getSlots())
             {
                 write("\n");
 
@@ -351,7 +608,7 @@ public:
         increaseIndent();
 
         bool first = true;
-        for (auto mixin : pattern->_mixins)
+        for (auto mixin : pattern->getMixins())
         {
             if (!first) write(", ");
             else first = false;
@@ -402,13 +659,8 @@ public:
 
     Pattern* loadProgram(BCDecl* bcProgram)
     {
-        Pattern* pattern = new Pattern();
-
-        Mixin* mixin = new Mixin(pattern, bcProgram, nullptr);
-
-        pattern->_mixins.push_back(mixin);
-
-        return pattern;
+        Mixin* mixin = new Mixin(bcProgram, nullptr, nullptr);
+        return mixin;
     }
 
     void pushFrame(BCDecl const* decl, CodeChunk const* chunk, Part* part)
@@ -428,17 +680,15 @@ public:
         _frame = _frame->_parent;
     }
 
-    void initializePart(Part* part)
+    void initializePart(Part* part, Mixin* mixin)
     {
-        auto mixin = part->_mixin;
-        auto mainPart = mixin->_decl;
 
         // Okay, now we run the initialization logic!!!
 
         // iterate over the members, and initialize them
         // based on their provided logic...
 
-        for( auto member : mainPart->_members )
+        for( auto member : mixin->getMembers() )
         {
             pushFrame(member, &member->initCode, part);
 
@@ -447,29 +697,45 @@ public:
 
     }
 
-    Object* createObject(Pattern* pattern)
+    Object* createObject(SimplePattern* pattern)
     {
-        Object* object = new Object(pattern);
+        Size instanceSize = pattern->getInstanceSize();
 
-        size_t partCount = pattern->_mixins.size();
+        void* objectMemory = malloc(instanceSize);
+        memset(objectMemory, 0, instanceSize);
 
-        // First allocate all the parts, without initializing them
-        for( auto mixin : pattern->_mixins )
+        // Run constructors to get things into a basic
+        // constructed-but-unitinitialized state.
+        //
+        Object* object = new(objectMemory) Object(pattern);
+        for (auto mixin : pattern->getMixins())
         {
-            auto mainPart = mixin->_decl;
-
-            Part* part = new Part(object, mixin);
-
-            object->_parts.push_back(part);
+            void* partMemory = object->getPartForMixin(mixin);
+            Part* part = new(partMemory) Part(mixin);
         }
 
-        // Now walk through the parts and run their intialization logic
-        for( auto part : object->_parts )
+        // Now run per-part initialization logic.
+        //
+        for (auto part : object->getParts())
         {
-            initializePart(part);
+            auto mixin = part->getMixin();
+
+            for (auto member : mixin->getMembers())
+            {
+                pushFrame(member, &member->initCode, part);
+                execute();
+            }
         }
+
+        // TODO: We logically want to run the "do" part of
+        // the object here as well...
 
         return object;
+    }
+
+    Object* createObject(Pattern* pattern)
+    {
+        return createObject(pattern->getSimplePattern());
     }
 
     void runObject(Object* object)
@@ -479,11 +745,11 @@ public:
         // This will always start with the most-general part object,
         // and work its way to the most-specialized...
         //
-        if (object->_parts.size() == 0)
+        if( object->getPattern()->isEmpty() )
             return;
 
-        auto part = object->_parts[0];
-        auto decl = part->_mixin->_decl;
+        auto part = object->getFirstPart();
+        auto decl = part->getDecl();
 
         pushFrame(decl, &decl->bodyCode, part);
         execute();
@@ -581,7 +847,7 @@ public:
                     auto value = pop();
                     auto part = (Part*) pop().getPtr();
 
-                    part->_slots[slotIndex] = value;
+                    part->setSlot(slotIndex, value);
                 }
                 break;
 
@@ -590,40 +856,27 @@ public:
                     auto slotIndex = readUInt();
                     auto part = (Part*) pop().getPtr();
 
-                    auto value = part->_slots[slotIndex];
+                    auto value = part->getSlot(slotIndex);
                     push(value);
                 }
                 break;
 
             case Opcode::CreatePatternFromMainPart:
                 {
-                    auto pattern = new Pattern();
+                    auto mixin = new Mixin(_frame->_decl, _frame->_self, nullptr);
 
-                    auto mainPart = _frame->_decl;
-
-                    auto mainPartMixin = new Mixin(pattern, mainPart, _frame->_self);
-                    pattern->_mixins.push_back(mainPartMixin);
-
-                    push(pattern);
+                    push(mixin);
                 }
                 break;
 
             case Opcode::CreatePatternFromBaseAndMainPart:
                 {
-                    auto basePattern = (Pattern*) pop().getPtr();
+                    // TODO: We need to handle any cases that do *not* evaluate to
+                    // a mixin-based pattern elsewhere...
 
-                    auto pattern = new Pattern();
+                    auto basePattern = (Mixin*) pop().getPtr();
 
-                    for( auto baseMixin : basePattern->_mixins )
-                    {
-                        auto mixin = new Mixin(pattern, baseMixin->_decl, baseMixin->_origin);
-                        pattern->_mixins.push_back(mixin);
-                    }
-
-                    auto mainPart = _frame->_decl;
-
-                    auto mainPartMixin = new Mixin(pattern, mainPart, _frame->_self);
-                    pattern->_mixins.push_back(mainPartMixin);
+                    auto pattern = new Mixin(_frame->_decl, _frame->_self, basePattern);
 
                     push(pattern);
                 }
@@ -631,34 +884,14 @@ public:
 
             case Opcode::GetEmptyPattern:
                 {
-                    if( !_emptyPattern )
-                    {
-                        _emptyPattern = new Pattern();
-                    }
-                    push(_emptyPattern);
+                    auto pattern = EmptyPattern::get();
+                    push(pattern);
                 }
                 break;
 
             case Opcode::GetSelfPart:
                 {
                     push(_frame->_self);
-                }
-                break;
-
-            case Opcode::GetObjectFromPart:
-                {
-                    auto part = (Part*) pop().getPtr();
-                    auto object = part->_parentObject;
-                    push(object);
-                }
-                break;
-
-            case Opcode::GetPartFromObject:
-                {
-                    auto object = (Object*) pop().getPtr();
-                    // TODO: how to pick the right part?
-                    auto part = object->_parts[0];
-                    push(part);
                 }
                 break;
 
@@ -682,10 +915,7 @@ public:
     }
 
 private:
-    static Pattern* _emptyPattern;
 };
-
-Pattern* VM::_emptyPattern = nullptr;
 
 }
 

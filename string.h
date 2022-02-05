@@ -14,6 +14,11 @@ struct StringSpan
         , _end(end)
     {}
 
+    explicit StringSpan(const char* begin)
+        : _begin(begin)
+        , _end(begin + strlen(begin))
+    {}
+
     size_t getSize() const { return _end - _begin; }
     char const* getData() const { return _begin; }
 

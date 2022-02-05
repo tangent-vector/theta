@@ -5,11 +5,14 @@
 
 namespace theta
 {
+
+struct Parser;
+
 namespace ast
 {
 
 class Decl;
-class MainPart;
+class PatternDeclBase;
 class Syntax;
 class Expr;
 
@@ -33,12 +36,17 @@ class Node
 public:
     enum class Tag
     {
-        InlineValueDecl,
-        ReferenceValueDecl,
-
         PatternDecl,
         VirtualPatternDecl,
         FurtherPatternDecl,
+
+        ObjectDecl,
+
+        VarDecl,
+        LetDecl,
+        ParamDecl,
+
+        SyntaxDecl,
 
         NameExpr,
         MemberExpr,
@@ -58,6 +66,8 @@ public:
 
         EmptyMixinPath,
         BaseMixinPath,
+
+        BuiltinModifier,
     };
 
     Node(Tag tag)
@@ -76,6 +86,10 @@ class Syntax : public Node
 {
 public:
     typedef Node Super;
+
+    Syntax(Tag tag)
+        : Super(tag)
+    {}
 
     Syntax(Tag tag, SourceRangeInfo info)
         : Super(tag)
@@ -150,19 +164,19 @@ class StaticMixin : public StaticPattern
 public:
     typedef StaticPattern Super;
 
-    StaticMixin(Decl* decl, Expr* origin, MixinPath* relativePath)
+    StaticMixin(PatternDeclBase* decl, Expr* origin, MixinPath* relativePath)
         : Super(Tag::StaticMixin)
         , _decl(decl)
         , _origin(origin)
         , _relativePath(relativePath)
     {}
 
-    MainPart* getMainPart();
+    PatternDeclBase* getDecl();
 
     // Declared bases
     std::vector<StaticPattern*> _bases;
 
-    Decl* _decl;
+    PatternDeclBase* _decl;
     Expr* _origin;
 
     MixinPath* _relativePath;
@@ -192,10 +206,26 @@ struct Classifier
     StaticPattern* pattern = nullptr;
 };
 
+class Modifier : public Syntax
+{
+public:
+    typedef Syntax Super;
+
+    Modifier(Tag tag, SourceRangeInfo const& info)
+        : Super(tag, info)
+    {}
+
+    Modifier* _next = nullptr;
+};
+
 class Stmt : public Syntax
 {
 public:
     typedef Syntax Super;
+
+    Stmt(Tag tag)
+        : Super(tag)
+    {}
 
     Stmt(Tag tag, SourceRangeInfo const& info)
         : Super(tag, info)
@@ -219,17 +249,146 @@ class Decl : public Stmt
 public:
     typedef Stmt Super;
 
+    Decl(Tag tag)
+        : Super(tag)
+    {}
+
     Decl(Tag tag, SourceRangeInfo const& info, Symbol* name)
         : Super(tag, info)
         , _name(name)
     {}
 
-    Symbol*     _name           = nullptr;
+    Symbol* _name = nullptr;
+    size_t _slotIndex = size_t(-1);
+};
+
+class SyntaxDecl : public Decl
+{
+public:
+    typedef Decl Super;
+
+    typedef Node* (*Callback)(Parser* parser, void* userData);
+
+    SyntaxDecl(Symbol* name, Callback callback, void* userData)
+        : Super(Tag::SyntaxDecl, SourceRangeInfo(), name)
+        , _callback(callback)
+        , _userData(userData)
+    {}
+
+    Callback _callback;
+    void* _userData;
+};
+
+class ValueDeclBase : public Decl
+{
+public:
+    typedef Decl Super;
+
+    ValueDeclBase(Tag tag, SourceRangeInfo const& info, Symbol* name, Expr* typeExpr)
+        : Super(tag, info, name)
+        , _typeExpr(typeExpr)
+    {}
+
+    Expr* _typeExpr;
+};
+
+class VarDeclBase : public ValueDeclBase
+{
+public:
+    typedef ValueDeclBase Super;
+
+    VarDeclBase(Tag tag, SourceRangeInfo const& info, Symbol* name, Expr* typeExpr)
+        : Super(tag, info, name, typeExpr)
+    {}
+};
+
+class VarDecl : public VarDeclBase
+{
+public:
+    typedef VarDeclBase Super;
+
+    VarDecl(SourceRangeInfo const& info, Symbol* name, Expr* typeExpr)
+        : Super(Tag::VarDecl, info, name, typeExpr)
+    {}
+};
+
+class LetDeclBase : public VarDeclBase
+{
+public:
+    typedef VarDeclBase Super;
+
+    LetDeclBase(Tag tag, SourceRangeInfo const& info, Symbol* name, Expr* typeExpr)
+        : Super(tag, info, name, typeExpr)
+    {}
+};
+
+class LetDecl : public LetDeclBase
+{
+public:
+    typedef LetDeclBase Super;
+
+    LetDecl(SourceRangeInfo const& info, Symbol* name, Expr* typeExpr)
+        : Super(Tag::LetDecl, info, name, typeExpr)
+    {}
+};
+
+class ParamDecl : public LetDeclBase
+{
+public:
+    typedef LetDeclBase Super;
+
+    ParamDecl(SourceRangeInfo const& info, Symbol* name, Expr* typeExpr)
+        : Super(Tag::ParamDecl, info, name, typeExpr)
+    {}
+};
+
+class PatternDeclBase : public Decl
+{
+public:
+    typedef Decl Super;
+
+    PatternDeclBase(Tag tag)
+        : Super(tag)
+    {}
+
+    PatternDeclBase(Tag tag, SourceRangeInfo const& info, Symbol* name)
+        : Super(tag, info, name)
+    {}
 
     std::vector<Expr*> _bases;
-    MainPart* _mainPart = nullptr;
 
-    size_t _slotIndex = size_t(-1);
+    std::vector<Decl*> _members;
+    size_t _slotCount = 0;
+
+    Stmt* _bodyStmt = nullptr;
+};
+
+class PatternDecl : public PatternDeclBase
+{
+public:
+    typedef PatternDeclBase Super;
+
+    PatternDecl()
+        : Super(Tag::PatternDecl)
+    {}
+
+    PatternDecl(SourceRangeInfo const& info, Symbol* name)
+        : Super(Tag::PatternDecl, info, name)
+    {}
+};
+
+class ObjectDecl : public PatternDeclBase
+{
+public:
+    typedef PatternDeclBase Super;
+
+    ObjectDecl()
+        : Super(Tag::ObjectDecl)
+    {}
+
+    ObjectDecl(SourceRangeInfo const& info, Symbol* name)
+        : Super(Tag::ObjectDecl, info, name)
+    {}
 };
 
 class Expr : public Stmt
@@ -297,13 +456,13 @@ class SelfExpr : public TypedExpr
 public:
     typedef TypedExpr Super;
 
-    SelfExpr(SourceRangeInfo const& info, Decl* decl, SelfExpr* parent, Classifier classifier)
+    SelfExpr(SourceRangeInfo const& info, PatternDeclBase* decl, SelfExpr* parent, Classifier classifier)
         : Super(Tag::SelfPath, info, classifier)
         , _decl(decl)
         , _parent(parent)
     {}
 
-    Decl* _decl;
+    PatternDeclBase* _decl;
     SelfExpr* _parent;
 };
 
@@ -356,30 +515,12 @@ public:
 
 // Other paths...
 
-class MainPart : public Syntax
-{
-public:
-    typedef Syntax Super;
 
-    MainPart(SourceRangeInfo const& info)
-        : Super(Tag::MainPart, info)
-    {}
-
-    std::vector<Decl*> _decls;
-    size_t _slotCount = 0;
-
-    Stmt* _stmt = nullptr;
-};
 
 template<typename T>
 T* as(Node* node)
 {
     return dynamic_cast<T*>(node);
-}
-
-inline MainPart* StaticMixin::getMainPart()
-{
-    return _decl->_mainPart;
 }
 
 }

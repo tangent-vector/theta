@@ -21,11 +21,6 @@ struct Parser
         _nextToken = _lexer->readToken();
     }
 
-    Decl* lookUp(Symbol* name)
-    {
-
-    }
-
     SourceLoc getLoc()
     {
         return SourceLoc();
@@ -172,26 +167,108 @@ struct Parser
         return parseExprSuffix(parseNameRef(name));
     }
 
-    void parseDeclPattern(Decl* decl)
+    struct Scope
+    {
+        PatternDeclBase* _decl = nullptr;
+        Scope* _parent = nullptr;
+    };
+    Scope* _scope = nullptr;
+
+    struct WithScope : Scope
+    {
+        WithScope(Parser* self, PatternDeclBase* decl)
+            : _self(self)
+        {
+            _decl = decl;
+
+            _parent = _self->_scope;
+            _self->_scope = this;
+        }
+
+        ~WithScope()
+        {
+            _self->_scope = _parent;
+        }
+
+        Parser* _self;
+    };
+
+    void parseParam(PatternDeclBase* decl)
+    {
+        auto nameToken = readIdentifier();
+        expect(Token::Code::Colon);
+
+        auto typeExpr = parseExpr();
+
+        auto paramDecl = new ParamDecl(nameToken, nameToken, typeExpr);
+
+        decl->_members.push_back(paramDecl);
+    }
+
+    void parseParams(PatternDeclBase* decl)
+    {
+        for (;;)
+        {
+            switch (peekTokenCode())
+            {
+            case Token::Code::RParen:
+            case Token::Code::EndOfFile:
+                return;
+
+            default:
+                break;
+            }
+
+            parseParam(decl);
+
+            switch (peekTokenCode())
+            {
+            case Token::Code::RParen:
+            case Token::Code::EndOfFile:
+                return;
+
+            default:
+                break;
+            }
+
+            expect(Token::Code::Comma);
+        }
+    }
+
+    void parsePatternDeclBase(PatternDeclBase* decl)
     {
         // Bases, if any
         while( peekTokenCode() == Token::Code::Identifier )
         {
             auto base = parseExpr();
             decl->_bases.push_back(base);
+
+            if (readIf(Token::Code::Comma))
+                continue;
+            break;
+        }
+
+        if (peekTokenCode() == Token::Code::LParen)
+        {
+            // Parameters...
+
+            auto openToken = readToken();
+
+            parseParams(decl);
+
+            expect(Token::Code::RParen);
         }
 
         if(peekTokenCode() == Token::Code::LCurly)
         {
+            WithScope withScope(this, decl);
+
             // Pattern "mainpart" body
             auto openToken = readToken();
 
-            MainPart* mainPart = new MainPart(openToken);
-            parseMainPartBody(mainPart);
+            parseMainPartBody(decl);
 
             expect(Token::Code::RCurly);
-
-            decl->_mainPart = mainPart;
         }
         else
         {
@@ -212,6 +289,21 @@ struct Parser
         }
     }
 
+    PatternDecl* parsePatternDecl()
+    {
+        auto decl = new PatternDecl();
+        parsePatternDeclBase(decl);
+        return decl;
+
+    }
+
+    ObjectDecl* parseObjectDecl()
+    {
+        auto decl = new ObjectDecl();
+        parsePatternDeclBase(decl);
+        return decl;
+    }
+
     Decl* parseDecl(NameToken const& name)
     {
         Syntax::Tag kind = Syntax::Tag::PatternDecl;
@@ -220,11 +312,33 @@ struct Parser
             kind = Syntax::Tag::InlineValueDecl;
         }
 
-        auto decl = new Decl(kind, name, name);
+        auto decl = new SimpleDecl(kind, name, name);
 
         parseDeclPattern(decl);
 
         return decl;
+    }
+
+    SyntaxDecl* maybeLookUpSyntax(Symbol* name)
+    {
+        // TODO: This should be better hooked into the actual semantic checking step,
+        // so that syntax can actually be brought in through the statically visible
+        // bases, and follow the same scoping rules as everything else.
+        //
+        for (auto s = _scope; s; s = s->_parent)
+        {
+            auto decl = s->_decl;
+
+            for (auto member : decl->_members)
+            {
+                if (member->_name != name)
+                    continue;
+
+                return as<SyntaxDecl>(member);
+            }
+        }
+
+        return nullptr;
     }
 
     Stmt* parseDeclOrStmt()
@@ -249,6 +363,16 @@ struct Parser
 
                 auto nameToken = readIdentifier();
 
+                auto syntax = maybeLookUpSyntax(nameToken);
+                if (syntax)
+                {
+                    auto result = syntax->_callback(this);
+                    auto stmt = as<Stmt>(result);
+                    return stmt;
+                }
+
+
+
                 if (peekTokenCode() == Token::Code::Colon)
                 {
                     readToken();
@@ -266,12 +390,12 @@ struct Parser
         }
     }
 
-    void addStmt(MainPart* parent, Stmt* newStmt)
+    void addStmt(PatternDeclBase* parent, Stmt* newStmt)
     {
-        Stmt* oldStmt = parent->_stmt;
+        Stmt* oldStmt = parent->_bodyStmt;
         if (!oldStmt)
         {
-            parent->_stmt = newStmt;
+            parent->_bodyStmt = newStmt;
         }
         else if (auto oldSeqStmt = as<SeqStmt>(oldStmt))
         {
@@ -282,21 +406,21 @@ struct Parser
             auto seqStmt = new SeqStmt(oldStmt->getRangeInfo());
             seqStmt->stmts.push_back(oldStmt);
             seqStmt->stmts.push_back(newStmt);
-            parent->_stmt = seqStmt;
+            parent->_bodyStmt = seqStmt;
         }
     }
 
-    void addDecl(MainPart* parent, Decl* decl)
+    void addDecl(PatternDeclBase* parent, Decl* decl)
     {
-        if (parent->_stmt != nullptr)
+        if (parent->_bodyStmt != nullptr)
         {
             error(decl->getLoc(), "cannot put declarations after statements");
         }
 
-        parent->_decls.push_back(decl);
+        parent->_members.push_back(decl);
     }
 
-    void parseDeclOrStmt(MainPart* parent)
+    void parseDeclOrStmt(PatternDeclBase* parent)
     {
         Stmt* term = parseDeclOrStmt();
         if(!term)
@@ -312,7 +436,7 @@ struct Parser
         }
     }
 
-    void parseMainPartBody(MainPart* parent)
+    void parseMainPartBody(PatternDeclBase* parent)
     {
         for(;;)
         {
@@ -329,12 +453,48 @@ struct Parser
         }
     }
 
+    Modifier* parseBuiltinModifier()
+    {
+        return new Modifier(Modifier::Tag::BuiltinModifier, SourceRangeInfo());
+    }
+
+    template<typename T, T* (Parser::*callback)()>
+    SyntaxDecl::Callback getSyntaxCallback()
+    {
+        struct Helper
+        {
+            static Node* _callback(Parser* parser)
+            {
+                return (parser->*callback)();
+            }
+        };
+        return &Helper::_callback;
+    }
+
+    PatternDeclBase* _superGlobalDecl = nullptr;
+
+    void _initSuperGlobalDecl()
+    {
+        _superGlobalDecl = new PatternDecl();
+
+        addBuiltinSyntax<Modifier, &Parser::parseBuiltinModifier>("__builtin");
+    }
+
+
     Decl* parseProgram()
     {
+
+        // set up the super-global environment with things like built-in syntax...
+
+        SyntaxDecl* builtinModifierDecl = new SyntaxDecl(getSymbol(StringSpan("__builtin")), getSyntaxCallback<Modifier, &Parser::parseBuiltinModifier>());
+        superGlobalBody->_decls.push_back(builtinModifierDecl);
+
+        WithScope withScope(this, superGlobalDecl);
+
         MainPart* body = new MainPart(peekToken());
         parseMainPartBody(body);
 
-        Decl* decl = new Decl(Decl::Tag::PatternDecl, body->getRangeInfo(), nullptr);
+        SimpleDecl* decl = new SimpleDecl(Decl::Tag::PatternDecl, body->getRangeInfo(), getSymbol(StringSpan("theta")));
         decl->_mainPart = body;
 
         return decl;

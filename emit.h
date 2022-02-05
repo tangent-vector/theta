@@ -252,14 +252,13 @@ struct Emitter
     }
 
     // Emit code to construct the pattern for `decl` on the stack...
-    void emitPattern(ast::Decl* decl)
+    void emitPattern(ast::PatternDeclBase* decl)
     {
         size_t baseCount = decl->_bases.size();
-        auto mainPart = decl->_mainPart;
-\
+
         // There are many special cases we want to handle...
 
-        if( mainPart )
+//        if( mainPart )
         {
             if( baseCount == 0 )
             {
@@ -279,6 +278,7 @@ struct Emitter
                 error(decl->getLoc(), "unhandled merge case");
             }
         }
+        /*
         else
         {
             if( baseCount == 0 )
@@ -298,28 +298,42 @@ struct Emitter
                 error(decl->getLoc(), "unhandled merge case");
             }
         }
+        */
     }
 
     BCDecl* emitDecl(ast::Decl* astDecl)
+    {
+        if (auto simpleDecl = as<ast::PatternDeclBase>(astDecl))
+        {
+            return emitSimpleDecl(simpleDecl);
+        }
+        else
+        {
+            error(astDecl->getLoc(), "unhandled decl case");
+            return nullptr;
+        }
+    }
+
+    BCDecl* emitSimpleDecl(ast::PatternDeclBase* astDecl)
     {
         BCDecl* bcDecl = new BCDecl();
         bcDecl->name = astDecl->_name;
         bcDecl->parent = getBCDecl();
 
-        if (auto astMainPart = astDecl->_mainPart)
+//        if (auto astMainPart = astDecl->_mainPart)
         {
             WithScope withScope(this, astDecl, bcDecl);
 
-            bcDecl->_slotCount = astMainPart->_slotCount;
+            bcDecl->_slotCount = astDecl->_slotCount;
 
-            for (auto astMember : astMainPart->_decls)
+            for (auto astMember : astDecl->_members)
             {
                 auto bcMember = emitDecl(astMember);
                 bcDecl->_members.push_back(bcMember);
             }
 
             WithChunk withChunk(this, &bcDecl->bodyCode);
-            if (auto stmt = astMainPart->_stmt)
+            if (auto stmt = astDecl->_bodyStmt)
             {
                 emitStmt(stmt);
             }
@@ -341,7 +355,7 @@ struct Emitter
             error(astDecl->getLoc(), "unhandled decl in emit");
             break;
 
-        case Decl::Tag::InlineValueDecl:
+        case Decl::Tag::ObjectDecl:
             // Need to emit logic that computes the pattern,
             // then create a value of that type, then install
             // it into the correct slot...

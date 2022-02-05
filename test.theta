@@ -1,11 +1,34 @@
 
-MyClass:
+// TODO: declare builtin types/patterns here
+
+__builtin
+Int: {}
+
+Program:
 {
-	doThing:
+
+// BEGIN USER_PROGRAM
+
+	MyClass:
 	{
+		doThing:
+		{
+		}
 	}
+
+	a: @MyClass;
+
+	factorial: (n:Int)
+	{
+		if (n <= 1) return 1;
+		else return n * factorial( n - 1 );
+	}
+
+	a.doThing;
+
+// END USER_PROGRAM
+
 }
 
-a: @MyClass;
+program: @Program;
 
-a.doThing;

@@ -716,14 +716,34 @@ public:
 
         // Now run per-part initialization logic.
         //
+        // Note: we run the code on a sub-VM because this one
+        // could already be executing code on its stack, and
+        // could be creating an object as part of implementing
+        // one of its opcodes.
+        //
+        // TODO: make the `createObject()` path be "stackless"
+        // so that it can run the initialization code of sub-objects
+        // directly on the stack.
+        //
+        // E.g., we could have this code push all the necessary
+        // frames (might need to be in the reverse of the order given
+        // here...) and then return the object *without* calling
+        // `execute()`, so that resuming the VM would automatically
+        // run all those frames in order (each returning to the next).
+        //
+        // Alternatively, the init code for each member could have built-in
+        // logic to jump to the initialization of the next member (or just
+        // concatenate them, of course...).
+        //
+        VM subVM;
         for (auto part : object->getParts())
         {
             auto mixin = part->getMixin();
 
             for (auto member : mixin->getMembers())
             {
-                pushFrame(member, &member->initCode, part);
-                execute();
+                subVM.pushFrame(member, &member->initCode, part);
+                subVM.execute();
             }
         }
 
@@ -740,18 +760,28 @@ public:
 
     void runObject(Object* object)
     {
-        // Basically, we want to run the "do part" of the object...
+        // We basically want to "wind up" all the code that
+        // makes up the body of the parts of `object`, from
+        // the most-general part to the most-specialized.
         //
-        // This will always start with the most-general part object,
-        // and work its way to the most-specialized...
+        // In practice, the parts come in pre-ordered in
+        // exactly that order (most general first, then next
+        // most general, etc.)
+        //
+        // We have to handle the slightly annoying special case
+        // of an object with *no* parts first.
         //
         if( object->getPattern()->isEmpty() )
             return;
 
+        // Otherwise, we can simply start running the body code
+        // of the first part in order, and assume that its `Inner`
+        // ops will migrate to subsequence parts as needed.
+        //
         auto part = object->getFirstPart();
         auto decl = part->getDecl();
-
         pushFrame(decl, &decl->bodyCode, part);
+
         execute();
     }
 
@@ -817,6 +847,23 @@ public:
                 error(SourceLoc(), "invalid opcode");
                 return;
 
+            case Opcode::Inner:
+                {
+                    auto currentPart = _frame->_self;
+                    auto currentMixin = currentPart->getMixin();
+
+                    auto innerMixin = currentMixin->_next;
+                    if (innerMixin)
+                    {
+                        auto object = currentPart->getObject();
+                        auto innerPart = object->getPartForMixin(innerMixin);
+
+                        auto innerDecl = innerPart->getDecl();
+                        pushFrame(innerDecl, &innerDecl->bodyCode, innerPart);
+                    }
+                }
+                break;
+
             case Opcode::Nop:
                 break;
 
@@ -830,8 +877,12 @@ public:
 
 
             case Opcode::Return:
-                popFrame();
-                return;
+                {
+                    popFrame();
+                    if (!_frame)
+                        return;
+                }
+                break;
 
             case Opcode::CreateObject:
                 {

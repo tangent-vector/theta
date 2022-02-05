@@ -15,10 +15,15 @@ namespace theta
     X(InvalidChar)          \
     X(LCurly)               \
     X(RCurly)               \
+    X(LParen)               \
+    X(RParen)               \
     X(Semicolon)            \
     X(Colon)                \
     X(At)                   \
     X(Dot)                  \
+    X(InfixOperator)        \
+    X(Hash)                 \
+    X(Comma)                \
     /* end */
 
 struct Token

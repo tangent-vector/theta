@@ -38,6 +38,8 @@ private:
 
     Token::Code readTokenImpl(Token::Value& outValue);
 
+    Token::Code readLineComment();
+
     int peekChar()
     {
         if (isAtEnd()) return kEndOfFile;
@@ -77,6 +79,25 @@ Token Lexer::readToken()
     }
 }
 
+Token::Code Lexer::readLineComment()
+{
+    for (;;)
+    {
+        int c = peekChar();
+        switch (c)
+        {
+        case kEndOfFile:
+        case '\r':
+        case '\n':
+            return Token::Code::LineComment;
+
+        default:
+            readChar();
+            continue;
+        }
+    }
+}
+
 Token::Code Lexer::readTokenImpl(Token::Value& outValue)
 {
     char const* textStart = _cursor;
@@ -85,6 +106,26 @@ Token::Code Lexer::readTokenImpl(Token::Value& outValue)
     {
     case kEndOfFile: return Token::Code::EndOfFile;
 
+    case '/':
+        {
+            switch(peekChar())
+            {
+            case '/':
+                readChar();
+                return readLineComment();
+
+            default:
+                break;
+            }
+
+            outValue.symbol = getSymbol(StringSpan(textStart, _cursor));
+            return Token::Code::InfixOperator;
+        }
+        break;
+
+    case '#': return Token::Code::Hash;
+    case '(': return Token::Code::LParen;
+    case ')': return Token::Code::RParen;
     case '{': return Token::Code::LCurly;
     case '}': return Token::Code::RCurly;
     case ';': return Token::Code::Semicolon;

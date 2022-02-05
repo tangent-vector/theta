@@ -32,7 +32,7 @@ public:
         }
     }
 
-    void pushScope(Decl* decl)
+    void pushScope(SimpleDecl* decl)
     {
         assert(decl->_mainPart);
 
@@ -56,7 +56,11 @@ public:
     {
         Classifier classifier;
         classifier.kind = getClassifierKind(decl);
-        classifier.pattern = createStaticPattern(part, decl);
+
+        if (auto simpleDecl = as<SimpleDecl>(decl))
+        {
+            classifier.pattern = createStaticPattern(part, simpleDecl);
+        }
         return classifier;
     }
 
@@ -313,7 +317,7 @@ public:
         return emptyPattern;
     }
 
-    StaticPattern* createStaticPattern(Expr* origin, Decl* decl)
+    StaticPattern* createStaticPattern(Expr* origin, SimpleDecl* decl)
     {
         std::vector<StaticPattern*> bases;
         // TODO: handle further-binding
@@ -435,6 +439,18 @@ public:
 #endif
 
     void checkDecl(Decl* decl)
+    {
+        if (auto simpleDecl = as<SimpleDecl>(decl))
+        {
+            checkSimpleDecl(simpleDecl);
+        }
+        else
+        {
+            error(decl->getLoc(), "unhandled case for pattern merge");
+        }
+    }
+
+    void checkSimpleDecl(SimpleDecl* decl)
     {
         // TODO: check for name conflict
 
